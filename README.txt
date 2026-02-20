@@ -16,7 +16,7 @@ What this does
         3    => disabled
     - 4th element (tuple[3], PLMN) is used for connect command.
 - Button "Connect" sends: AT+COPS=1,2,<PLMN>
-- Button "Set Auto-connect" calls modem.set_auto_connect with {bus:"1-1.2"}
+- Button "Auto Select Network" sends command to modem: at+cops=0, at+cfun=0 then at+cfun=1.
 
 Files included
 --------------
