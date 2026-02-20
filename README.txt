@@ -48,7 +48,7 @@ Adjustments you may need
     /usr/lib/lua/luci/controller/mobilescan.lua
   Look for:
     local bus  = ... or "1-1.2"
-    local port = ... or "ttyUSB2"
+    local port = ... or "/dev/ttyUSB2"
 
 - If your scan command differs from AT+COPS=?, edit:
     local cmd = ... or "AT+COPS=?"
