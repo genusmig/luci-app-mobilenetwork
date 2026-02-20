@@ -7,7 +7,7 @@ local sys   = require "luci.sys"
 
 local RPC_URL = "http://127.0.0.1:80/rpc"
 local DEFAULT_BUS  = "1-1.2"
-local DEFAULT_PORT = "ttyUSB2"
+local DEFAULT_PORT = "/dev/ttyUSB2"
 
 local function shell_escape_single(s)
   return "'" .. (s:gsub("'", [['"'"']])) .. "'"
