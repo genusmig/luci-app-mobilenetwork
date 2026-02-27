@@ -51,9 +51,15 @@ function parseCopsResponse(text) {
 function signalToBars(sig) {
   if (!isIntLike(sig)) return 0;
   const v = toInt(sig);
-  if (v <= 0) return 0;
-  if (v >= 4) return 4;
-  return v;
+  // If it's already a 0..4 scale, keep it.
+  if (v >= 0 && v <= 4) return v;
+  // Map CSQ 0..31 to 0..4 bars.
+  if (v <= 1) return 0;
+  if (v <= 9) return 1;
+  if (v <= 14) return 2;
+  if (v <= 19) return 3;
+  if (v <= 31) return 4;
+  return 0;
 }
 
 function makeSignalIcon(sig) {
@@ -91,8 +97,11 @@ function parseCopsSignal(resp) {
   if (!m) return null;
   const v = parseInt(m[1], 10);
   if (!Number.isFinite(v)) return null;
+  // 99 means "not known or not detectable"
+  if (v === 99) return null;
   return v;
 }
+const REQUEST_TIMEOUT_MS = 60000;
 /** Fix “weird ?” / object errors */
 function prettyError(e) {
   if (!e) return 'Unknown error';
@@ -429,12 +438,12 @@ return view.extend({
 
     async function doScan() {
       if (isScanning || isBusyAction) {
-        modal.start('Please wait... operation in progress.', 300000, 'Busy');
+        modal.start('Please wait... operation in progress.', REQUEST_TIMEOUT_MS, 'Busy');
         setTimeout(() => modal.stop(true), 2200);
         return;
       }
 
-      modal.start('Scanning mobile networks... waiting for modem response', 300000, 'Scanning');
+      modal.start('Scanning mobile networks... waiting for modem response', REQUEST_TIMEOUT_MS, 'Scanning');
 
       try {
         setBusyScan(true);
@@ -447,7 +456,7 @@ return view.extend({
         setConnectEnabledByRule();
         renderTable();
 
-        const res = await request.get(luciUrl('admin/network/mobilescan/scan'), { cache: false, timeout: 300000 });
+        const res = await request.get(luciUrl('admin/network/mobilescan/scan'), { cache: false, timeout: REQUEST_TIMEOUT_MS });
         const json = res.json();
 
         if (!json || json.ok !== true) {
@@ -480,20 +489,20 @@ return view.extend({
 
     async function doConnect() {
       if (isBusyAction || isScanning) {
-        modal.start('Please wait... another operation is running.', 300000, 'Busy');
+        modal.start('Please wait... another operation is running.', REQUEST_TIMEOUT_MS, 'Busy');
         setTimeout(() => modal.stop(true), 2200);
         return;
       }
 
       if (connectBtn.hasAttribute('disabled')) {
-        modal.start('Connect is disabled (selection rule).', 300000, 'Info');
+        modal.start('Connect is disabled (selection rule).', REQUEST_TIMEOUT_MS, 'Info');
         setTimeout(() => modal.stop(true), 2500);
         return;
       }
 
       const plmn = String(selectedFourth ?? '').trim();
       if (!plmn) {
-        modal.start('No operator selected.', 300000, 'Error');
+        modal.start('No operator selected.', REQUEST_TIMEOUT_MS, 'Error');
         setTimeout(() => modal.stop(true), 3200);
         return;
       }
@@ -501,14 +510,14 @@ return view.extend({
       const selectedTuple = tuples[selectedIndex];
       const opName = operatorNameFromTuple(selectedTuple);
 
-      modal.start(`Connecting to ${opName}... waiting for OK`, 300000, 'Connecting');
+      modal.start(`Connecting to ${opName}... waiting for OK`, REQUEST_TIMEOUT_MS, 'Connecting');
 
       try {
         setBusyActionState(true);
 
         // 1) Connect
         const url = luciUrl('admin/network/mobilescan/connect') + '?plmn=' + encodeURIComponent(plmn);
-        const res = await request.get(url, { cache: false, timeout: 300000 });
+        const res = await request.get(url, { cache: false, timeout: REQUEST_TIMEOUT_MS });
         const json = res.json();
 
         if (!json || json.ok !== true) {
@@ -527,7 +536,7 @@ return view.extend({
         // 2) Auto-connect (only after OK)
         modal.update(`Connected to ${opName}. Enabling auto-connect... waiting for reply`, 'Auto-connect', 'working');
 
-        const res2 = await request.get(luciUrl('admin/network/mobilescan/set_auto_connect'), { cache: false, timeout: 300000 });
+        const res2 = await request.get(luciUrl('admin/network/mobilescan/set_auto_connect'), { cache: false, timeout: REQUEST_TIMEOUT_MS });
         const json2 = res2.json();
 
         if (!json2 || json2.ok !== true) {
@@ -556,12 +565,12 @@ return view.extend({
 
     async function doAutoSelectNetwork() {
       if (isBusyAction || isScanning) {
-        modal.start('Please wait... another operation is running.', 300000, 'Busy');
+        modal.start('Please wait... another operation is running.', REQUEST_TIMEOUT_MS, 'Busy');
         setTimeout(() => modal.stop(true), 2200);
         return;
       }
 
-      modal.start('Auto select network: starting...', 300000, 'Auto Select');
+      modal.start('Auto select network: starting...', REQUEST_TIMEOUT_MS, 'Auto Select');
 
       try {
         setBusyActionState(true);
@@ -573,7 +582,7 @@ return view.extend({
           modal.update(`Sending ${cmd}\nWaiting for OK...`, 'Auto Select');
 
           const url = luciUrl('admin/network/mobilescan/at') + '?cmd=' + encodeURIComponent(cmd);
-          const res = await request.get(url, { cache: false, timeout: 300000 });
+          const res = await request.get(url, { cache: false, timeout: REQUEST_TIMEOUT_MS });
           const json = res.json();
 
           if (!json || json.ok !== true) {
@@ -592,7 +601,7 @@ return view.extend({
 
         // 2) Auto-connect (after OKs)
         modal.update('Auto select complete. Enabling auto-connect...', 'Auto-connect', 'working');
-        const res2 = await request.get(luciUrl('admin/network/mobilescan/set_auto_connect'), { cache: false, timeout: 300000 });
+        const res2 = await request.get(luciUrl('admin/network/mobilescan/set_auto_connect'), { cache: false, timeout: REQUEST_TIMEOUT_MS });
         const json2 = res2.json();
         if (!json2 || json2.ok !== true) {
           modal.update(`Auto-connect failed: ${json2?.error || 'unknown error'}`, 'Error', 'error');
@@ -631,7 +640,7 @@ return view.extend({
       setInfoLoading(true);
       try {
         const url = luciUrl('admin/network/mobilescan/at') + '?cmd=' + encodeURIComponent('AT+COPS?');
-        const res = await request.get(url, { cache: false, timeout: 300000 });
+        const res = await request.get(url, { cache: false, timeout: REQUEST_TIMEOUT_MS });
         const json = res.json();
         if (!json || json.ok !== true) {
           currentOpInfo.textContent = 'Current operator: error';
@@ -644,7 +653,7 @@ return view.extend({
         if (opText) opText.textContent = lastOpName;
 
         const urlSig = luciUrl('admin/network/mobilescan/at') + '?cmd=' + encodeURIComponent('AT+CSQ');
-        const resSig = await request.get(urlSig, { cache: false, timeout: 300000 });
+        const resSig = await request.get(urlSig, { cache: false, timeout: REQUEST_TIMEOUT_MS });
         const jsonSig = resSig.json();
         if (!jsonSig || jsonSig.ok !== true) {
           return;

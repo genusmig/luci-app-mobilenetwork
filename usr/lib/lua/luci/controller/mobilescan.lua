@@ -4,6 +4,7 @@ module("luci.controller.mobilescan", package.seeall)
 local http  = require "luci.http"
 local jsonc = require "luci.jsonc"
 local sys   = require "luci.sys"
+local nixio = require "nixio"
 
 local RPC_URL = "http://127.0.0.1:80/rpc"
 local DEFAULT_BUS  = "1-1.2"
@@ -16,7 +17,7 @@ end
 local function rpc_call(obj, max_time)
   local body = jsonc.stringify(obj)
   local connect_timeout = 3
-  local max_t = tonumber(max_time) or 300
+  local max_t = tonumber(max_time) or 60
 
   local cmd = "curl -s --connect-timeout " .. connect_timeout .. " --max-time " .. max_t .. " " ..
               "-H 'glinet: 1' " ..
@@ -39,25 +40,46 @@ local function rpc_call(obj, max_time)
   return parsed, nil
 end
 
+local function is_busy_error(parsed, err)
+  local function has_busy(s)
+    if not s or type(s) ~= "string" then return false end
+    return s:lower():match("busy") ~= nil
+  end
+
+  if err and has_busy(err.error) then return true end
+  if parsed and parsed.error then
+    if has_busy(parsed.error.message) then return true end
+    if has_busy(parsed.error.data) then return true end
+  end
+  if parsed and parsed.result and has_busy(parsed.result.response) then return true end
+  return false
+end
+
+local function rpc_call_retry(obj, max_time, retries)
+  local last_parsed, last_err
+  local tries = tonumber(retries) or 3
+  if tries < 1 then tries = 1 end
+
+  for i = 1, tries do
+    local parsed, err = rpc_call(obj, max_time)
+    last_parsed, last_err = parsed, err
+    if not is_busy_error(parsed, err) then
+      return parsed, err
+    end
+    if i < tries then
+      nixio.nanosleep(1, 0)
+    end
+  end
+
+  return last_parsed, last_err
+end
+
 function index()
   entry({"admin", "network", "mobilescan"}, template("mobilescan/index"), _("Mobile Network"), 90).dependent = true
   entry({"admin", "network", "mobilescan", "scan"}, call("action_scan")).leaf = true
   entry({"admin", "network", "mobilescan", "connect"}, call("action_connect")).leaf = true
   entry({"admin", "network", "mobilescan", "set_auto_connect"}, call("action_set_auto_connect")).leaf = true
   entry({"admin", "network", "mobilescan", "at"}, call("action_at")).leaf = true
-end
-
-function action_scan()
-  http.prepare_content("application/json")
-  local payload = {
-    jsonrpc = "2.0",
-    method  = "call",
-    params  = { "", "modem", "send_at_command", { bus= DEFAULT_BUS, port= DEFAULT_PORT, command= "AT+COPS=?" } },
-    id = 1
-  }
-  local parsed, err = rpc_call(payload, 300)
-  if err then http.write_json(err); return end
-  http.write_json({ ok=true, data=parsed })
 end
 
 function action_scan()
@@ -71,7 +93,7 @@ function action_scan()
     id      = 1
   }
 
-  local parsed_disc, err_disc = rpc_call(disconnect_payload, 300)
+  local parsed_disc, err_disc = rpc_call_retry(disconnect_payload, 60, 3)
   if err_disc then
     http.write_json(err_disc)
     return
@@ -96,13 +118,34 @@ function action_scan()
     id = 1
   }
 
-  local parsed_scan, err_scan = rpc_call(scan_payload, 300)
+  local parsed_scan, err_scan = rpc_call_retry(scan_payload, 60, 3)
   if err_scan then
     http.write_json(err_scan)
     return
   end
 
   http.write_json({ ok=true, data=parsed_scan })
+end
+
+function action_connect()
+  http.prepare_content("application/json")
+  local plmn = http.formvalue("plmn") or ""
+  if plmn == "" or not plmn:match("^%d+$") then
+    http.write_json({ ok=false, error="Invalid PLMN" })
+    return
+  end
+
+  local cmd = string.format('AT+COPS=1,2,"%s"', plmn)
+  local payload = {
+    jsonrpc = "2.0",
+    method  = "call",
+    params  = { "", "modem", "send_at_command",
+      { bus= DEFAULT_BUS, port= DEFAULT_PORT, command= cmd } },
+    id = 1
+  }
+  local parsed, err = rpc_call_retry(payload, 60, 3)
+  if err then http.write_json(err); return end
+  http.write_json({ ok=true, data=parsed })
 end
 
 function action_set_auto_connect()
@@ -113,7 +156,7 @@ function action_set_auto_connect()
     params  = { "", "modem", "set_connect", { bus= DEFAULT_BUS } },
     id = 1
   }
-  local parsed, err = rpc_call(payload, 300)
+  local parsed, err = rpc_call_retry(payload, 60, 3)
   if err then http.write_json(err); return end
   http.write_json({ ok=true, data=parsed })
 end
@@ -132,7 +175,7 @@ function action_at()
       { bus= DEFAULT_BUS, port=DEFAULT_PORT, command=cmd } },
     id = 1
   }
-  local parsed, err = rpc_call(payload, 300)
+  local parsed, err = rpc_call_retry(payload, 60, 3)
   if err then http.write_json(err); return end
   http.write_json({ ok=true, data=parsed })
 end
